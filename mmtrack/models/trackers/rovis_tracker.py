@@ -2,6 +2,7 @@
 import torch
 from mmdet.evaluation.functional import bbox_overlaps
 from mmdet.models.layers.matrix_nms import mask_matrix_nms
+from mmengine.structures import InstanceData
 
 from mmtrack.registry import MODELS
 from .base_tracker import BaseTracker
@@ -198,9 +199,9 @@ class TrackFormerTracker(BaseTracker):
             # discard low quality object queries
             query_update_threshold = 0.3
             existing_tracks.feats[
-                existing_tracks_scores <
+                existing_tracks.scores <
                 query_update_threshold] = existing_tracks_input_queries[
-                    existing_tracks_scores < query_update_threshold]
+                    existing_tracks.scores < query_update_threshold]
 
         # fixed queries generate new tracks
         new_tracks_mask = pred_det_instances.query_ids < num_fixed_query
@@ -217,7 +218,7 @@ class TrackFormerTracker(BaseTracker):
 
         # merge the two
         if existing_tracks_mask.sum() > 0:
-            pred_track_instances = existing_tracks.cat(new_det)
+            pred_track_instances = InstanceData.cat([existing_tracks, new_det])
             track_static_query_ids = torch.cat((
                 existing_tracks_static_query_ids,
                 new_det.query_ids,
@@ -236,7 +237,7 @@ class TrackFormerTracker(BaseTracker):
                 # labels=labels,
                 nms_thr=0.4,
                 white_list=None if existing_tracks_mask.sum() == 0 else list(
-                    range(len(existing_tracks_ids))))
+                    range(len(existing_tracks.ids))))
             pred_track_instances = pred_track_instances[keep_inds]
         else:
             scores, labels, masks, keep_inds = mask_matrix_nms(

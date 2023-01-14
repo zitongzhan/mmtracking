@@ -469,8 +469,8 @@ class ROVIS(BaseMultiObjectTracker):
             labels_per_image, bboxes, mask_pred_binary = results[0][
                 'ins_results']
             # query id is in the fst idx, while confidence is in the last idx
-            scores = bboxes[:, -1]
-            query_ids = bboxes[:, 0].long()
+            scores = bboxes[:, -1].cpu()
+            query_ids = bboxes[:, 0].cpu().long()
             bboxes = bboxes[:, 1:]  # remove query_id
 
             # apply the permutation to queries also
@@ -479,7 +479,7 @@ class ROVIS(BaseMultiObjectTracker):
             if self.query_substitute and input_queries is not None:
                 # find the original query id
                 original_query_ids = torch.arange(
-                    num_queries + len(input_queries), device=scores.device)
+                    num_queries + len(input_queries), device='cpu')
                 # evict the static query, afterwards idx correspond to queries
                 original_query_ids = tensor_deselect(original_query_ids,
                                                      track_static_query_ids)
