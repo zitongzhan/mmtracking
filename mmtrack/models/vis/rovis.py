@@ -390,7 +390,7 @@ class ROVIS(BaseMultiObjectTracker):
     def predict(self,
                 inputs: Dict[str, torch.Tensor],
                 data_samples: SampleList,
-                rescale=False,
+                rescale=True,
                 track_maintain_conf=0.25,
                 track_est_conf=0.3,
                 **kwargs):
@@ -471,7 +471,7 @@ class ROVIS(BaseMultiObjectTracker):
             # query id is in the fst idx, while confidence is in the last idx
             scores = bboxes[:, -1].cpu()
             query_ids = bboxes[:, 0].cpu().long()
-            bboxes = bboxes[:, 1:]  # remove query_id
+            bboxes = bboxes[:, 1:5]  # remove query_id
 
             # apply the permutation to queries also
             queries = queries[query_ids]
