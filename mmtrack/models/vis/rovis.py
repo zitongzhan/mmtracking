@@ -23,8 +23,13 @@ def get_ref_data_samples(data_samples):
     return ref_data_samples
 
 
-def full_mask_matching(assigner, sampler, cls_score, mask_pred, gt_instances,
-                       img_metas):
+def full_mask_matching(assigner,
+                       sampler,
+                       cls_score,
+                       mask_pred,
+                       gt_instances,
+                       img_metas,
+                       tail_known_matching=None):
     """Compute classification and mask targets for one image.
 
     Args:
@@ -66,6 +71,21 @@ def full_mask_matching(assigner, sampler, cls_score, mask_pred, gt_instances,
         labels=gt_instances.labels, masks=gt_masks_downsampled)
     pred_instances = InstanceData(scores=cls_score, masks=mask_pred)
 
+    if tail_known_matching is not None and tail_known_matching.shape[0] > 0:
+        # exclude the last len known idx of predictions
+        pred_indices = torch.arange(len(pred_instances), device='cpu')
+        pred_instances = pred_instances[:-tail_known_matching.shape[0]]
+        matched_pred_indices = pred_indices[-tail_known_matching.shape[0]:]
+        matched_pred_indices = matched_pred_indices[tail_known_matching >= 0]
+        # exclude the ground truth instances that are already matched
+        unmatched_mask = torch.ones_like(
+            gt_instances_downsampled.labels, dtype=bool, device='cpu')
+        unmatched_mask[tail_known_matching[tail_known_matching >= 0]] = False
+        original_gt_inds = torch.arange(
+            len(gt_instances_downsampled), device='cpu')
+        gt_instances_downsampled = gt_instances_downsampled[unmatched_mask]
+        original_gt_inds = original_gt_inds[unmatched_mask]
+
     # assign and sample
     assign_result = assigner.assign(
         pred_instances=pred_instances,
@@ -75,9 +95,19 @@ def full_mask_matching(assigner, sampler, cls_score, mask_pred, gt_instances,
         assign_result=assign_result,
         pred_instances=pred_instances,
         gt_instances=gt_instances_downsampled)
-    pos_inds = sampling_result.pos_inds
+    pos_inds = sampling_result.pos_inds.cpu()
+    pos_assigned_gt_inds = sampling_result.pos_assigned_gt_inds.cpu()
 
-    return pos_inds.cpu(), sampling_result.pos_assigned_gt_inds.cpu()
+    if tail_known_matching is not None and tail_known_matching.shape[0] > 0:
+        # recover the original gt inds
+        pos_assigned_gt_inds = original_gt_inds[pos_assigned_gt_inds]
+        # append the known matching
+        pos_inds = torch.cat([pos_inds, matched_pred_indices])
+        pos_assigned_gt_inds = torch.cat([
+            pos_assigned_gt_inds, tail_known_matching[tail_known_matching >= 0]
+        ])
+        assert len(pos_inds) == len(pos_assigned_gt_inds)
+    return pos_inds, pos_assigned_gt_inds
 
 
 @MODELS.register_module()
@@ -122,13 +152,16 @@ class ROVIS(BaseMultiObjectTracker):
             self.tracker = MODELS.build(tracker)
 
         self.query_substitute = query_substitute
+        self.three_frame_training = True
 
     def add_track_queries_to_targets(self,
                                      prev_indices,
                                      prev_masks,
                                      data_samples,
                                      add_false_pos=True,
-                                     length_padding=True):
+                                     length_padding=True,
+                                     gt_instances_name='gt_instances',
+                                     ref_gt_instances_name='ref_gt_instances'):
         """select track queries for next frame's targets.
 
         targets: dict, {}
@@ -142,8 +175,10 @@ class ROVIS(BaseMultiObjectTracker):
 
         for batch_idx, (prev_ind, data_sample) in enumerate(
                 zip(prev_indices, data_samples)):
-            prev_instance_ids_per_img = data_sample.gt_instances.instances_id
-            instance_ids_per_img = data_sample.ref_gt_instances.instances_id
+            prev_instance_ids_per_img = data_sample.get(
+                gt_instances_name).instances_id
+            instance_ids_per_img = data_sample.get(
+                ref_gt_instances_name).instances_id
 
             prev_out_ind, prev_target_ind = prev_ind
             prev_instance_ids_per_img = prev_instance_ids_per_img.to(
@@ -368,9 +403,10 @@ class ROVIS(BaseMultiObjectTracker):
                 if self.detector.panoptic_head.use_query_embed else None,
             )
             # clean inference results
-            _ = ref_mask_loss.pop('all_mask_pred')
-            _ = ref_mask_loss.pop('all_cls_scores')
-            _ = ref_mask_loss.pop('last_query_feats')
+            ref_all_mask_preds = ref_mask_loss.pop('all_mask_pred')
+            ref_all_cls_scores = ref_mask_loss.pop('all_cls_scores')
+            last_query_feats = ref_mask_loss.pop('last_query_feats')
+            ref_processed_gt = ref_mask_loss.pop('gt')
 
             # add prefix for ref_mask_loss
             # divide by 2
@@ -380,6 +416,68 @@ class ROVIS(BaseMultiObjectTracker):
             }
             assert not set(ref_mask_loss.keys()) & set(losses.keys())
             losses.update(ref_mask_loss)
+
+            if self.three_frame_training:
+                # train additional ref frame
+                with torch.no_grad():
+                    prev_indices = []
+                    for batch_idx, (prev_query_idx, curr_target_idx
+                                    ) in enumerate(cross_frame_matching):
+                        prev_indices.append(
+                            full_mask_matching(
+                                self.detector.panoptic_head.assigner,
+                                self.detector.panoptic_head.sampler,
+                                ref_all_cls_scores[-1][batch_idx],
+                                ref_all_mask_preds[-1][batch_idx],
+                                ref_processed_gt[batch_idx],
+                                data_samples[batch_idx].metainfo,
+                                tail_known_matching=curr_target_idx,
+                            ))
+                    # prepare queries and ground truth for the reference frame
+                    cross_frame_matching = self.add_track_queries_to_targets(
+                        prev_indices,
+                        ref_all_mask_preds[-1],
+                        data_samples,
+                        length_padding=False
+                        if self.query_substitute else True,
+                        gt_instances_name='ref_gt_instances',
+                        ref_gt_instances_name='gt_instances')
+                    additional_queries = []
+                    added_query_target_idx = []
+                    prev_query_indices = []
+                    for batch_idx, (prev_query_idx, curr_target_idx
+                                    ) in enumerate(cross_frame_matching):
+                        additional_queries.append(
+                            last_query_feats[prev_query_idx, batch_idx,
+                                             ...].detach())
+                        added_query_target_idx.append(curr_target_idx)
+                        prev_query_indices.append(
+                            prev_query_idx)  # only useful in substitution mode
+
+                    # inference on first images
+                    ref_mask_loss = self.detector.panoptic_head.loss(
+                        x,
+                        data_samples,
+                        additional_queries=additional_queries,
+                        additional_query_target_indices=added_query_target_idx,
+                        remove_static_query=prev_query_indices
+                        if self.query_substitute else None,
+                        additional_query_embed=prev_query_indices if
+                        self.detector.panoptic_head.use_query_embed else None,
+                    )
+                    # clean inference results
+                    ref_all_mask_preds = ref_mask_loss.pop('all_mask_pred')
+                    ref_all_cls_scores = ref_mask_loss.pop('all_cls_scores')
+                    last_query_feats = ref_mask_loss.pop('last_query_feats')
+                    ref_processed_gt = ref_mask_loss.pop('gt')
+                    # add prefix for ref_mask_loss
+                    # divide by 2
+                    ref2_mask_loss = {
+                        'ref2_' + k: v / 2.0
+                        for k, v in ref_mask_loss.items()
+                    }
+                    assert not set(ref2_mask_loss.keys()) & set(losses.keys())
+                    losses.update(ref2_mask_loss)
 
         # avoid loss override
         assert not set(mask_loss.keys()) & set(losses.keys())

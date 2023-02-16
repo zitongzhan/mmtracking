@@ -497,6 +497,9 @@ class AdditionalQueriesFormerHead(Mask2FormerHead):
         # preprocess ground truth
         batch_gt_instances = self.preprocess_gt(batch_gt_instances,
                                                 batch_gt_semantic_segs)
+        # perform a shallow copy of the list
+        preprocessed_gt_instances = list(batch_gt_instances)
+
         gt_labels = [gt.labels for gt in batch_gt_instances]
         gt_masks = [gt.masks for gt in batch_gt_instances]
 
@@ -633,10 +636,7 @@ class AdditionalQueriesFormerHead(Mask2FormerHead):
         losses['all_mask_pred'] = all_mask_preds
         losses['all_cls_scores'] = all_cls_scores
         losses['last_query_feats'] = last_query_feats
-        if additional_query_target_indices is None:
-            pass
-            # pass the original gt_labels and gt_masks to the loss
-            losses['gt'] = batch_gt_instances
+        losses['gt'] = preprocessed_gt_instances
         return losses
 
     def predict(self, x: Tuple[torch.Tensor], batch_data_samples: SampleList,
