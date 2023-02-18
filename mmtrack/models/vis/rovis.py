@@ -153,6 +153,7 @@ class ROVIS(BaseMultiObjectTracker):
 
         self.query_substitute = query_substitute
         self.three_frame_training = True
+        self.cycle_consistency = True
 
     def add_track_queries_to_targets(self,
                                      prev_indices,
@@ -306,6 +307,30 @@ class ROVIS(BaseMultiObjectTracker):
                 res[batch_idx] = (prev_out_ind, target_ind)
         return res
 
+    def id_query_dict(self, match_indices_1, embeddings_1, match_indices_2,
+                      embeddings_2, data_samples):
+        loss_sum = torch.tensor(0.0).to(embeddings_1.device)
+
+        for batch_idx, ((query_indices_1, target_indices_1),
+                        (query_indices_2, target_indices_2)) in enumerate(
+                            zip(match_indices_1, match_indices_2)):
+            # find the common ids
+            equal_mask = target_indices_1.unsqueeze(1) == target_indices_2
+            equal_indices_1, equal_indices_2 = equal_mask.nonzero(
+                as_tuple=True)
+
+            # perform the consistency loss
+            query_embeddings_1 = embeddings_1[query_indices_1[equal_indices_1],
+                                              batch_idx]
+            query_embeddings_2 = embeddings_2[query_indices_2[equal_indices_2],
+                                              batch_idx]
+            diff = query_embeddings_1 - query_embeddings_2
+            loss = (diff**2).sum(dim=1).mean()
+            loss_sum += loss
+
+        loss_dict = dict(loss_id_consistency=loss_sum)
+        return loss_dict
+
     def loss(self, inputs: Dict[str, torch.Tensor], data_samples: SampleList,
              **kwargs):
         """Calculate losses from a batch of inputs and data samples.
@@ -390,7 +415,10 @@ class ROVIS(BaseMultiObjectTracker):
                     additional_query_target_index.append(curr_target_idx)
                     prev_query_indices.append(
                         prev_query_idx)  # only useful in substitution mode
-
+            id_query_dict_1 = dict(
+                match_indices_1=prev_indices,
+                embeddings_1=last_query_feats,
+            )
             # inference on reference images
             ref_mask_loss = self.detector.panoptic_head.loss(
                 ref_x,
@@ -479,6 +507,26 @@ class ROVIS(BaseMultiObjectTracker):
                     assert not set(ref2_mask_loss.keys()) & set(losses.keys())
                     losses.update(ref2_mask_loss)
 
+                    if self.cycle_consistency:
+                        match_indices_2 = []
+                        for batch_idx, target_idx in enumerate(
+                                added_query_target_idx):
+                            tail_indices = torch.arange(
+                                len(last_query_feats) - len(target_idx),
+                                len(last_query_feats))
+                            # filter out the tail indices that are not valid
+                            tail_indices = tail_indices[target_idx >= 0]
+                            target_idx = target_idx[target_idx >= 0]
+                            match_indices_2.append((tail_indices, target_idx))
+                        id_query_dict_2 = dict(
+                            match_indices_2=match_indices_2,
+                            embeddings_2=last_query_feats,
+                        )
+                        id_query_dict = self.id_query_dict(
+                            data_samples=data_samples,
+                            **id_query_dict_1,
+                            **id_query_dict_2)
+                        losses.update(id_query_dict)
         # avoid loss override
         assert not set(mask_loss.keys()) & set(losses.keys())
         losses.update(mask_loss)
