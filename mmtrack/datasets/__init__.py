@@ -8,6 +8,7 @@ from .imagenet_vid_dataset import ImagenetVIDDataset
 from .lasot_dataset import LaSOTDataset
 from .mot_challenge_dataset import MOTChallengeDataset
 from .otb_dataset import OTB100Dataset
+from .ovis_dataset import OVISDataset
 from .reid_dataset import ReIDDataset
 from .samplers import EntireVideoBatchSampler, QuotaSampler, VideoSampler
 from .sot_coco_dataset import SOTCocoDataset
@@ -19,10 +20,25 @@ from .vot_dataset import VOTDataset
 from .youtube_vis_dataset import YouTubeVISDataset
 
 __all__ = [
-    'BaseVideoDataset', 'MOTChallengeDataset', 'BaseSOTDataset',
-    'LaSOTDataset', 'ReIDDataset', 'GOT10kDataset', 'SOTCocoDataset',
-    'SOTImageNetVIDDataset', 'TrackingNetDataset', 'YouTubeVISDataset',
-    'ImagenetVIDDataset', 'RandomSampleConcatDataset', 'TaoDataset',
-    'UAV123Dataset', 'VOTDataset', 'OTB100Dataset', 'DanceTrackDataset',
-    'VideoSampler', 'QuotaSampler', 'EntireVideoBatchSampler'
+    'BaseVideoDataset',
+    'MOTChallengeDataset',
+    'BaseSOTDataset',
+    'LaSOTDataset',
+    'ReIDDataset',
+    'GOT10kDataset',
+    'SOTCocoDataset',
+    'SOTImageNetVIDDataset',
+    'TrackingNetDataset',
+    'YouTubeVISDataset',
+    'ImagenetVIDDataset',
+    'RandomSampleConcatDataset',
+    'TaoDataset',
+    'UAV123Dataset',
+    'VOTDataset',
+    'OTB100Dataset',
+    'DanceTrackDataset',
+    'VideoSampler',
+    'QuotaSampler',
+    'EntireVideoBatchSampler',
+    'OVISDataset',
 ]

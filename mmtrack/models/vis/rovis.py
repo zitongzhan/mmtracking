@@ -153,7 +153,7 @@ class ROVIS(BaseMultiObjectTracker):
 
         self.query_substitute = query_substitute
         self.three_frame_training = True
-        self.cycle_consistency = True
+        self.cycle_consistency = False
 
     def add_track_queries_to_targets(self,
                                      prev_indices,
@@ -310,10 +310,13 @@ class ROVIS(BaseMultiObjectTracker):
     def id_query_dict(self, match_indices_1, embeddings_1, match_indices_2,
                       embeddings_2, data_samples):
         loss_sum = torch.tensor(0.0).to(embeddings_1.device)
-
+        batch_sz_count = 0 + 1e6
         for batch_idx, ((query_indices_1, target_indices_1),
                         (query_indices_2, target_indices_2)) in enumerate(
                             zip(match_indices_1, match_indices_2)):
+            if len(target_indices_1) == 0 or len(target_indices_2) == 0:
+                continue
+            batch_sz_count += 1
             # find the common ids
             equal_mask = target_indices_1.unsqueeze(1) == target_indices_2
             equal_indices_1, equal_indices_2 = equal_mask.nonzero(
@@ -328,7 +331,7 @@ class ROVIS(BaseMultiObjectTracker):
             loss = (diff**2).sum(dim=1).mean()
             loss_sum += loss
 
-        loss_dict = dict(loss_id_consistency=loss_sum)
+        loss_dict = dict(loss_id_consistency=loss_sum / batch_sz_count)
         return loss_dict
 
     def loss(self, inputs: Dict[str, torch.Tensor], data_samples: SampleList,
